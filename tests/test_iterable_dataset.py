@@ -1445,6 +1445,18 @@ def test_repeat_examples_iterable(n, num_times):
             assert next(iterator)[1] == all_examples[i % len(all_examples)], f"iteration {i} failed,"
 
 
+@pytest.mark.parametrize("num_times", [3, 0])
+def test_repeat_arrow_examples_iterable(num_times):
+    total = 10
+    base_ex_iterable = ArrowExamplesIterable(generate_tables_fn, {"n": total})
+    ex_iterable = RepeatExamplesIterable(base_ex_iterable, num_times=num_times)
+    expected = [x for _, pa_table in generate_tables_fn(n=total) for x in pa_table.to_pylist()] * num_times
+    assert [example for _, example in ex_iterable] == expected
+    assert [example for _, pa_table in ex_iterable.iter_arrow() for example in pa_table.to_pylist()] == expected
+    assert_load_state_dict_resumes_iteration(ex_iterable)
+    assert_load_state_dict_resumes_arrow_iteration(ex_iterable)
+
+
 def test_vertically_concatenated_examples_iterable():
     ex_iterable1 = ExamplesIterable(generate_examples_fn, {"label": 10})
     ex_iterable2 = ExamplesIterable(generate_examples_fn, {"label": 5})
@@ -1514,6 +1526,7 @@ def test_horizontally_concatenated_examples_iterable():
         BufferShuffledExamplesIterable(ExamplesIterable(generate_examples_fn, {}), 10, np.random.default_rng(42)),
         SkipExamplesIterable(ExamplesIterable(generate_examples_fn, {}), 10),
         TakeExamplesIterable(ExamplesIterable(generate_examples_fn, {}), 10),
+        RepeatExamplesIterable(ExamplesIterable(generate_examples_fn, {}), 2),
         FormattedExamplesIterable(
             ExamplesIterable(generate_examples_fn, {}), None, Features({"id": Value("int32")}), token_per_repo_id={}
         ),
@@ -1564,6 +1577,7 @@ def test_no_iter_arrow(ex_iterable: _BaseExamplesIterable):
         # BufferShuffledExamplesIterable(ArrowExamplesIterable(generate_tables_fn, {}), 10, np.random.default_rng(42)),  # not implemented
         SkipExamplesIterable(ArrowExamplesIterable(generate_tables_fn, {}), 10),
         TakeExamplesIterable(ArrowExamplesIterable(generate_tables_fn, {}), 10),
+        RepeatExamplesIterable(ArrowExamplesIterable(generate_tables_fn, {}), 2),
         FormattedExamplesIterable(
             ArrowExamplesIterable(generate_tables_fn, {}), None, Features({"id": Value("int32")}), token_per_repo_id={}
         ),
@@ -2320,6 +2334,18 @@ def test_iterable_dataset_repeat(dataset: IterableDataset, n):
     assert isinstance(repeat_dataset._ex_iterable, RepeatExamplesIterable)
     assert repeat_dataset._ex_iterable.num_times == n
     assert list(repeat_dataset) == list(dataset) * n
+
+
+def test_iterable_dataset_repeat_keeps_arrow_format():
+    features = Features({"id": Value("int32")})
+    ds = Dataset.from_dict({"id": [0, 1]}, features=features).to_iterable_dataset().with_format("numpy")
+    repeated = ds.repeat(2)
+    assert repeated._ex_iterable.iter_arrow is not None
+    assert repeated._ex_iterable.is_typed == ds._ex_iterable.is_typed
+    assert repeated._ex_iterable.features == ds._ex_iterable.features
+    examples = list(repeated)
+    assert len(examples) == 4
+    assert [example["id"].dtype for example in examples] == [np.dtype("int32")] * 4
 
 
 def test_iterable_dataset_shard():
